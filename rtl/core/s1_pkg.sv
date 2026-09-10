@@ -19,6 +19,7 @@ package s1_pkg;
   // ---------------------------------------------------------------------------
   parameter int unsigned XLEN      = 64;
   parameter int unsigned ILEN      = 32;
+  parameter int unsigned CLEN      = 16;   // compressed instruction (and IALIGN) width
   parameter int unsigned PLEN      = 40;   // physical address width
   parameter int unsigned REG_ADDR_W = 5;
 
@@ -39,6 +40,23 @@ package s1_pkg;
     PRIV_S = 2'b01,
     PRIV_M = 2'b11
   } priv_lvl_e;
+
+  // ---------------------------------------------------------------------------
+  // RV64 major opcodes, inst[6:0].  Shared by the C expander and the decoder.
+  // ---------------------------------------------------------------------------
+  parameter logic [6:0] OPC_LOAD      = 7'b0000011;
+  parameter logic [6:0] OPC_LOAD_FP   = 7'b0000111;
+  parameter logic [6:0] OPC_OP_IMM    = 7'b0010011;
+  parameter logic [6:0] OPC_OP_IMM_32 = 7'b0011011;
+  parameter logic [6:0] OPC_STORE     = 7'b0100011;
+  parameter logic [6:0] OPC_STORE_FP  = 7'b0100111;
+  parameter logic [6:0] OPC_OP        = 7'b0110011;
+  parameter logic [6:0] OPC_LUI       = 7'b0110111;
+  parameter logic [6:0] OPC_OP_32     = 7'b0111011;
+  parameter logic [6:0] OPC_BRANCH    = 7'b1100011;
+  parameter logic [6:0] OPC_JALR      = 7'b1100111;
+  parameter logic [6:0] OPC_JAL       = 7'b1101111;
+  parameter logic [6:0] OPC_SYSTEM    = 7'b1110011;
 
   // ---------------------------------------------------------------------------
   // ALU
@@ -141,5 +159,19 @@ package s1_pkg;
     logic                 err;
     logic [1:0]           errcode;
   } mem_rsp_t;
+
+  // ---------------------------------------------------------------------------
+  // Fetch -> decode bundle (SPEC 6 fetch_rsp).  Contract: docs/modules/s1_fetch.md.
+  // ---------------------------------------------------------------------------
+  typedef struct packed {
+    logic [XLEN-1:0]  pc;
+    logic [ILEN-1:0]  instr;       // 32-bit encoding, C already expanded
+    logic [ILEN-1:0]  instr_raw;   // as fetched (RVFI, mtval); 16-bit zero-extended
+    logic             compressed;  // next sequential pc is pc+2
+    logic             pred_taken;  // BTFN already redirected to the target
+    logic             exc;
+    logic [5:0]       exccode;     // EXC_INSTR_ACCESS_FAULT or EXC_ILLEGAL_INSTR
+    logic [XLEN-1:0]  exctval;
+  } fetch_rsp_t;
 
 endpackage

@@ -8,7 +8,7 @@
 | **Project** | T-02 (core backend: EX) |
 | **Spec** | SPEC §6, §7.3, §8.1, §8.2, §9, §10.2, §12 |
 | **Source** | `rtl/core/s1_execute.sv` (uses `rtl/core/s1_alu.sv`) |
-| **Testbench** | `verif/unit/tb_s1_execute.sv`: 594 173 checks |
+| **Testbench** | `verif/unit/tb_s1_execute.sv`: 594 322 checks |
 
 ## Purpose
 
@@ -121,7 +121,7 @@ occur: with C present, branch/JAL offsets are even and JALR clears bit 0.
 | Layer | Status | Where |
 |---|---|---|
 | Lint | clean, no waivers, all four configs | `make lint` |
-| Unit test | **594 173 checks**, 42 347 instructions (below). Counts are from Verilator 5.020, the CI version; they shift slightly with the simulator's random stream. | `verif/unit/tb_s1_execute.sv` |
+| Unit test | **594 322 checks**, 42 262 instructions (below). Counts are from Verilator 5.020, the CI version; they shift slightly with the simulator's random stream. | `verif/unit/tb_s1_execute.sv` |
 | Mutation | 18 of 18 caught (table below) | |
 | Co-simulation | not yet; covered once R-05 lands | |
 | Formal | not yet | T-07 |
@@ -181,7 +181,8 @@ Mutants, each a copy of `s1_execute.sv` with one line changed. All 18 are caught
 ## Known limitations
 
 - **The MUL and DIV units are not here.** EX provides the dispatch port; the units come next.
-- **Zicbom/Zicboz and DRET are not executed:** `decoded_op_t` has no fields for them (#4).
+- **Zicbom/Zicboz and DRET are not executed:** EX ignores `is_cbo`/`cbo_op` and does not act on
+  `SYS_DRET`; they pass through as plain instructions.
 - **Perf events are counted in EX,** so an instruction later squashed by an older trap is counted.
 - **The redirect path is long:** forwarding mux → comparator → mispredict → fetch address. This is
   the price of SPEC §8.2's penalty of 2.

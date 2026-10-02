@@ -300,6 +300,6 @@ module s1_execute
   // bits EX derives differently (instr: instr_raw is the mtval source).
   logic unused_op;
   assign unused_op = ^{op.mxif_candidate, op.rs1_re, op.rs2_re, op.is_mul, op.is_div,
-                       op.instr};
+                       op.is_cbo, op.cbo_op, op.instr};
 
 endmodule

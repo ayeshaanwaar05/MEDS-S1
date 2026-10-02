@@ -7,7 +7,8 @@ Clock and reset generators, scoreboards, AXI bus-functional models, coverage hel
 Anything synthesisable.
 
 ## How to add something
-If two testbenches need it, it belongs here.
+If two testbenches need it, it belongs here. Files here are include-only (`.svh`); the unit-test
+runner puts this directory on the include path, so a testbench writes `` `include "name.svh" ``.
 
 ## Catalogue projects that land here
 shared

@@ -30,6 +30,7 @@ import time
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 RTL = ROOT / "rtl"
 UNIT = ROOT / "verif" / "unit"
+COMMON = ROOT / "verif" / "common"
 WAIVERS = ROOT / "verif" / "verilator.vlt"
 BUILD = ROOT / "build" / "unit"
 
@@ -52,7 +53,8 @@ def run_one(tb: pathlib.Path, srcs: list[pathlib.Path], keep: bool) -> dict:
         shutil.rmtree(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    incdirs = sorted({str(p.parent) for p in srcs})
+    # verif/common is include-only shared TB code
+    incdirs = sorted({str(p.parent) for p in srcs} | {str(COMMON)})
     cmd = [
         "verilator", "--binary", "--timing", "-Wall",
         "--top-module", name,

@@ -8,7 +8,7 @@
 | **Project** | T-01 (core frontend) |
 | **Spec** | SPEC §6, §7.1, §8.2; INTERFACES.md §2 (I2 MEM-REQ) |
 | **Source** | `rtl/core/s1_fetch.sv` (+ `rtl/core/s1_rvc_expand.sv`) |
-| **Testbench** | `verif/unit/tb_s1_fetch.sv`: 325 355 checks |
+| **Testbench** | `verif/unit/tb_s1_fetch.sv`: 326 434 checks |
 
 ## Purpose
 
@@ -184,7 +184,7 @@ target is dropped. There are no page faults in v1 (no MMU); see open question 3.
 | Layer | Status | Where |
 |---|---|---|
 | Lint | clean, no waivers, all four configs | `make lint` |
-| Unit test | **325 355 checks.** Every instruction delivered is scoreboarded against a reference model that walks the memory image with the golden expander and golden BTFN (20 648 instructions). Protocol properties are checked every cycle | `verif/unit/tb_s1_fetch.sv` |
+| Unit test | **326 434 checks.** Every instruction delivered is scoreboarded against a reference model that walks the memory image with the golden expander and golden BTFN (20 983 instructions). Protocol properties are checked every cycle. Counts are from Verilator 5.020, the CI version; they shift slightly with the simulator's random stream. | `verif/unit/tb_s1_fetch.sv` |
 | Mutation | 12 hand-inserted bugs, 12 caught (table below) | |
 | Co-simulation | not yet; covered once R-05 lands | |
 | Formal | not yet. Good candidates: payload stability, ≤1 outstanding, credit invariant | T-07 |

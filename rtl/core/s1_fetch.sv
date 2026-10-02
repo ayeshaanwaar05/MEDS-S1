@@ -47,7 +47,8 @@ module s1_fetch
 
   localparam int unsigned WORD_BYTES = ILEN / 8;
   localparam int unsigned OFF_W      = $clog2(WORD_BYTES);
-  localparam int unsigned HW_BIT     = $clog2(CLEN / 8);
+  localparam int unsigned HW_BYTES   = CLEN / 8;
+  localparam int unsigned HW_BIT     = $clog2(HW_BYTES);
   localparam int unsigned HW_PER_WD  = ILEN / CLEN;
   localparam int unsigned WORD_LANES = XLEN / ILEN;
   localparam int unsigned LANE_W     = (WORD_LANES > 1) ? $clog2(WORD_LANES) : 1;
@@ -269,7 +270,7 @@ module s1_fetch
         // mtval names the faulting portion; mepc (pc) still names the start.
         ins.exc     = 1'b1;
         ins.exccode = EXC_INSTR_ACCESS_FAULT;
-        ins.exctval = head_pc_q + XLEN'(CLEN / 8);
+        ins.exctval = head_pc_q + XLEN'(HW_BYTES);
       end else begin
         ins.instr     = {win_hw[1], win_hw[0]};
         ins.instr_raw = {win_hw[1], win_hw[0]};
@@ -318,7 +319,7 @@ module s1_fetch
       else if (ex_redirect_valid_i) head_pc_q <= ex_pc;
       else if (bp_fire_q)           head_pc_q <= bp_target;
       else if (load)                head_pc_q <= head_pc_q + (ins_len2 ? XLEN'(WORD_BYTES)
-                                                                      : XLEN'(CLEN / 8));
+                                                                      : XLEN'(HW_BYTES));
 
       // A redirect drops valid without a handshake; ID is flushed by it too.
       if (kill_out) begin

@@ -234,6 +234,7 @@ module tb_s1_fetch
     mem_req_t   q0;
     fetch_rsp_t o0, e;
     bit         redirect_now, req_hs, rsp_hs, out_hs, new_req, stale_pending;
+    pend_t      p;
 
     // ---- drive
     if (rnd_redirects && !drv_ex && !drv_rt) begin
@@ -303,7 +304,9 @@ module tb_s1_fetch
 
     if (rsp_hs) void'(pend.pop_front());
     if (req_hs) begin
-      pend.push_back('{addr: req.addr, due: cycle + $urandom_range(lat_max, lat_min)});
+      p.addr = req.addr;
+      p.due  = cycle + $urandom_range(lat_max, lat_min);
+      pend.push_back(p);
       n_req_acc++;
     end
     check(pend.size() <= 1, "more than one I2 request outstanding (INTERFACES.md 2)");

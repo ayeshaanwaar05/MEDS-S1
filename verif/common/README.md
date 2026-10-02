@@ -7,8 +7,7 @@ Clock and reset generators, scoreboards, AXI bus-functional models, coverage hel
 Anything synthesisable.
 
 ## How to add something
-If two testbenches need it, it belongs here. Files here are include-only (`.svh`); the unit-test
-runner puts this directory on the include path, so a testbench writes `` `include "name.svh" ``.
+If two testbenches need it, it belongs here.
 
 ## Contents
 - `rv64_golden.svh`: reference RV64IMAC_Zicsr_Zifencei decoder (mask/match table) producing

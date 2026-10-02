@@ -7,7 +7,7 @@
 | **Backup** | _(assign at the T-01 design review)_ |
 | **Project** | T-01 (core frontend) |
 | **Spec** | SPEC §6, §7.1, §8.2; INTERFACES.md §2 (I2 MEM-REQ) |
-| **Source** | `rtl/core/s1_fetch.sv` (+ `rtl/core/s1_rvc_expand.sv`) |
+| **Source** | `rtl/core/s1_fetch.sv`; instantiates `s1_rvc_expand` ([page](s1_rvc_expand.md), separate PR) |
 | **Testbench** | `verif/unit/tb_s1_fetch.sv`: 326 434 checks |
 
 ## Purpose

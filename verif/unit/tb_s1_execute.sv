@@ -20,7 +20,7 @@ module tb_s1_execute
   import s1_pkg::*;
 ;
 
-  `include "rv64_golden.svh"
+  `include "verif/common/rv64_golden.svh"
 
   localparam int unsigned     WATCHDOG = 200;
   localparam logic [XLEN-1:0] LEN32    = XLEN'(ILEN / 8);

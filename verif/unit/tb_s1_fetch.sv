@@ -19,7 +19,7 @@ module tb_s1_fetch
   import s1_pkg::*;
 ;
 
-  `include "rvc_golden.svh"
+  `include "verif/common/rvc_golden.svh"
 
   // Expectations derive from these (R-V2).
   localparam int unsigned     BUF_HW     = 6;            // DUT FETCH_BUF_HW

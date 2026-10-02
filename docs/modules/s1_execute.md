@@ -8,7 +8,7 @@
 | **Project** | T-02 (core backend: EX) |
 | **Spec** | SPEC §6, §7.3, §8.1, §8.2, §9, §10.2, §12 |
 | **Source** | `rtl/core/s1_execute.sv` (uses `rtl/core/s1_alu.sv`) |
-| **Testbench** | `verif/unit/tb_s1_execute.sv`: 593 801 checks |
+| **Testbench** | `verif/unit/tb_s1_execute.sv`: 594 173 checks |
 
 ## Purpose
 
@@ -31,7 +31,7 @@ computed here and committed at retire (SPEC §7.3, §9.2).
 | `csr_addr_o`, `csr_re_o`, `csr_we_o` | out | 12, 1, 1 | side-effect-free query of the CSR file; intents follow Zicsr (no write for RS/RC with `rs1`/uimm = 0; no read for RW with `rd = x0`) |
 | `csr_rdata_i`, `csr_illegal_i` | in | `XLEN`, 1 | old value and access-check result for the query |
 | `ex_redirect_valid_o`, `_pc_o`, `_cb_idx_o` | out | 1, `XLEN`, `CB_IDX_W` | mispredict: flush IF (`s1_fetch`), flush ID, free CB entries younger than `cb_idx` |
-| `md_valid_o` / `md_ready_i`, `md_req_o` | out / in | `md_req_t` | MUL/DIV dispatch. `valid` never depends on `ready`; payload stable until accepted |
+| `md_valid_o` / `md_ready_i`, `md_req_o` | out / in | `md_req_t` | MUL/DIV dispatch. `valid` never depends on `ready`; payload stable until accepted. The unit answers WB with `md_rsp_t`; EX never sees the result |
 | `mem_valid_o` / `mem_ready_i`, `mem_o` | out / in | `ex_mem_t` | EX/MEM register |
 | `perf_br_taken_o`, `perf_br_mispredict_o` | out | 1 | one pulse per instruction (SPEC §12 frontend group) |
 
@@ -43,6 +43,14 @@ computed here and committed at retire (SPEC §7.3, §9.2).
 - **CSR instructions reach EX only when the CB is empty.** This is SPEC §8.2's serialisation. EX
   reads CSRs, so without it a read could miss an older, not-yet-retired CSR write.
 - Operand reads of `x0` are forced to zero whatever the select says.
+
+**What EX leaves to the completion buffer:**
+
+- **A dispatched MUL/DIV can outlive its CB entry.** EX has no kill towards the units. An
+  operation accepted on `md_req_o` runs to completion and returns `md_rsp_t` to WB even if a later
+  mispredict (`ex_redirect_valid_o`) freed its entry, and that index may have been reallocated by
+  then. The completion buffer (R-01) must reject a completion for an entry that is no longer the
+  one dispatched; neither EX nor WB can tell. (A retire flush is different: WB drains the units.)
 
 **Latency:** the redirect is combinational in the instruction's first EX cycle, which is what gives
 SPEC §8.2's mispredict penalty of 2 together with `s1_fetch`. Otherwise EX takes one instruction per
@@ -89,7 +97,8 @@ fetch every cycle.
   must not mark their entry done.
 
 **MUL/DIV:** dispatched with both operands and the CB index. They leave the main pipe here (SPEC §6)
-and never enter EX/MEM.
+and never enter EX/MEM. The unit returns `md_rsp_t` (entry, register, value) to WB; RV64M does not
+trap, so the response carries no exception group.
 
 ## Exceptions and errors
 
@@ -112,7 +121,7 @@ occur: with C present, branch/JAL offsets are even and JALR clears bit 0.
 | Layer | Status | Where |
 |---|---|---|
 | Lint | clean, no waivers, all four configs | `make lint` |
-| Unit test | **593 801 checks**, 42 397 instructions (below) | `verif/unit/tb_s1_execute.sv` |
+| Unit test | **594 173 checks**, 42 347 instructions (below). Counts are from Verilator 5.020, the CI version; they shift slightly with the simulator's random stream. | `verif/unit/tb_s1_execute.sv` |
 | Mutation | 18 of 18 caught (table below) | |
 | Co-simulation | not yet; covered once R-05 lands | |
 | Formal | not yet | T-07 |
@@ -189,3 +198,11 @@ Mutants, each a copy of `s1_execute.sv` with one line changed. All 18 are caught
    CSR-update fields; SPEC §9.1's `csr_update_t` is undefined.
 4. **When the register file is written.** SPEC §7.5 says WB writes the register file; §9.2 says the
    architectural write happens at retire. EX assumes §9.2, which is why CB forwarding exists.
+5. **MEM/WB forwarding has no valid.** `FWD_MEMWB` is selected in ID and applied one cycle later, on
+   the assumption that the producer leaves MEM in that cycle. #18's MEM can hold it longer (a read
+   straddling two beats, an I2 stall), and then `memwb_fwd_i` is not the producer's value and
+   nothing flags it. Two fixes, to be chosen with #18, #21 and #24:
+   - **ID stalls** instead of selecting `FWD_MEMWB` unless MEM guarantees completion next cycle.
+     EX is unchanged, but MEM must export that guarantee early enough for ID.
+   - **A valid beside `memwb_fwd_i`**, and EX waits for it before its first cycle. Local to EX and
+     WB, but an operand selecting `FWD_CB` must then stay readable across the wait.

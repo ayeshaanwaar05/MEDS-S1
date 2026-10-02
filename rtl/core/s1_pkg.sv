@@ -287,6 +287,14 @@ package s1_pkg;
     logic [REG_ADDR_W-1:0] rd;
   } md_req_t;
 
+  // MUL/DIV -> WB completion, the return leg of md_req_t.  RV64M does not trap,
+  // so there is no exception group; x0 is gated in WB.
+  typedef struct packed {
+    logic [CB_IDX_W-1:0]   cb_idx;
+    logic [REG_ADDR_W-1:0] rd;
+    logic [XLEN-1:0]       result;
+  } md_rsp_t;
+
   // ---------------------------------------------------------------------------
   // MEM-REQ protocol payloads (INTERFACES.md section 2)
   // ---------------------------------------------------------------------------

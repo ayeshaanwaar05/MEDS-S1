@@ -62,7 +62,8 @@ module s1_execute
   output logic                 perf_br_mispredict_o
 );
 
-  localparam int unsigned RVC_BYTES = 2;
+  localparam int unsigned RVC_BYTES   = 2;
+  localparam int unsigned INSTR_BYTES = ILEN / 8;
 
   decoded_op_t op;
   assign op = ex_i.op;
@@ -127,7 +128,7 @@ module s1_execute
   // ---------------------------------------------------------------------------
   logic [XLEN-1:0] pc_len, pc_imm, agu, jalr_tgt;
 
-  assign pc_len   = op.pc + (ex_i.compressed ? XLEN'(RVC_BYTES) : XLEN'(ILEN / 8));
+  assign pc_len   = op.pc + (ex_i.compressed ? XLEN'(RVC_BYTES) : XLEN'(INSTR_BYTES));
   assign pc_imm   = op.pc + op.imm;
   assign agu      = rs1 + (op.is_amo ? '0 : op.imm);      // AMO/LR/SC: rs1 only
   assign jalr_tgt = {agu[XLEN-1:1], 1'b0};

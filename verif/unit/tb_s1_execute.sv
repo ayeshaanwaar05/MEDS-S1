@@ -10,8 +10,9 @@
 // Description  :
 // Instructions come from a perfect decoder (verif/common/rv64_golden.svh).
 // Expected results come from an ISA model keyed on the mnemonic, independent
-// of decoded_op_t routing and of s1_alu.  The TB plays ID, the CSR file,
-// MUL/DIV and MEM with random backpressure, and checks every cycle.
+// of decoded_op_t routing and of s1_alu.  The TB plays ID, the CSR file, the
+// external MUL/DIV unit and MEM with random latency and backpressure, and
+// checks every cycle.
 //
 // Run:  make test-unit TB=s1_execute
 // =============================================================================
@@ -30,18 +31,17 @@ module tb_s1_execute
   priv_lvl_e           priv;
   logic                ex_valid, ex_ready;
   id_ex_t              ex_in;
-  logic [XLEN-1:0]     memwb_fwd, cb1_fwd, cb2_fwd;
   logic [11:0]         csr_addr;
   logic                csr_re, csr_we, csr_illegal;
   logic [XLEN-1:0]     csr_rdata;
   logic                rd_valid;
   logic [XLEN-1:0]     rd_pc;
-  logic [CB_IDX_W-1:0] rd_cb;
-  logic                md_valid, md_ready;
-  md_req_t             md_req;
+  logic                md_start, md_flush, md_done;
+  muldiv_op_e          md_op;
+  logic [XLEN-1:0]     md_a, md_b, md_result;
   logic                mem_valid, mem_ready;
   ex_mem_t             mem_out;
-  logic                perf_taken, perf_misp;
+  logic                perf_taken, perf_misp, perf_md_stall;
 
   s1_execute dut (
     .clk_i                (clk),
@@ -51,9 +51,6 @@ module tb_s1_execute
     .ex_valid_i           (ex_valid),
     .ex_ready_o           (ex_ready),
     .ex_i                 (ex_in),
-    .memwb_fwd_i          (memwb_fwd),
-    .cb_rs1_fwd_i         (cb1_fwd),
-    .cb_rs2_fwd_i         (cb2_fwd),
     .csr_addr_o           (csr_addr),
     .csr_re_o             (csr_re),
     .csr_we_o             (csr_we),
@@ -61,15 +58,19 @@ module tb_s1_execute
     .csr_illegal_i        (csr_illegal),
     .ex_redirect_valid_o  (rd_valid),
     .ex_redirect_pc_o     (rd_pc),
-    .ex_redirect_cb_idx_o (rd_cb),
-    .md_valid_o           (md_valid),
-    .md_ready_i           (md_ready),
-    .md_req_o             (md_req),
     .mem_valid_o          (mem_valid),
     .mem_ready_i          (mem_ready),
     .mem_o                (mem_out),
+    .md_start_o           (md_start),
+    .md_op_o              (md_op),
+    .md_a_o               (md_a),
+    .md_b_o               (md_b),
+    .md_flush_o           (md_flush),
+    .md_done_i            (md_done),
+    .md_result_i          (md_result),
     .perf_br_taken_o      (perf_taken),
-    .perf_br_mispredict_o (perf_misp)
+    .perf_br_mispredict_o (perf_misp),
+    .perf_muldiv_stall_o  (perf_md_stall)
   );
 
   int unsigned cycle = 0, checks = 0, errors = 0;
@@ -96,8 +97,9 @@ module tb_s1_execute
     logic [XLEN-1:0]     ftval;
     logic [XLEN-1:0]     v1, v2;
     fwd_src_e            s1, s2;
-    logic [CB_IDX_W-1:0] cb;
+    logic [TAG_W-1:0]    tag;
     priv_lvl_e           priv;
+    logic [XLEN-1:0]     md_res;    // what the external MUL/DIV unit answers
     decoded_op_t         op;
   } item_t;
 
@@ -109,7 +111,6 @@ module tb_s1_execute
     logic            csr_re, csr_we;
     logic            res_valid;
     ex_mem_t         m;
-    md_req_t         q;
   } exp_t;
 
   // CSR file model: fixed contents; illegal if nonexistent, above the current
@@ -134,21 +135,24 @@ module tb_s1_execute
     gop_e            g;
     logic [31:0]     i;
     logic [XLEN-1:0] len, pc_len, res, tgt, nxt, fetch_to, old, src;
-    logic            taken, ctrl_known, lsu, is_rw;
+    logic            taken, ctrl_known, lsu, is_rw, is_csr, is_amo;
     e = '0; i = it.instr; g = g_classify(i);
     len    = it.compressed ? LEN16 : LEN32;
     pc_len = it.pc + len;
-    res = '0; tgt = '0; taken = 1'b0; lsu = 1'b0;
+    res = '0; tgt = '0; taken = 1'b0; lsu = 1'b0; is_amo = 1'b0;
 
     // Zicsr intents
+    is_csr   = (it.op.csr_op != CSR_NONE);
     is_rw    = g inside {G_CSRRW, G_CSRRWI};
-    e.csr_re = it.op.is_csr && !(is_rw && i[11:7] == 0);
-    e.csr_we = it.op.is_csr && (is_rw || i[19:15] != 0);
+    e.csr_re = is_csr && !(is_rw && i[11:7] == 0);
+    e.csr_we = is_csr && (is_rw || i[19:15] != 0);
     old      = csr_val(i[31:20]);
 
+    // An MXIF candidate is illegal: this core has no coprocessor port.
     if (it.fexc) begin
       e.exc = 1; e.m.exccode = it.fcode; e.m.exctval = it.ftval;
-    end else if (it.op.illegal || (it.op.is_csr && csr_bad(i[31:20], e.csr_re, e.csr_we, it.priv))) begin
+    end else if (it.op.illegal || it.op.mxif_candidate ||
+                 (is_csr && csr_bad(i[31:20], e.csr_re, e.csr_we, it.priv))) begin
       e.exc = 1; e.m.exccode = EXC_ILLEGAL_INSTR; e.m.exctval = XLEN'(it.raw);
     end else if (g == G_ECALL) begin
       e.exc = 1;
@@ -200,8 +204,6 @@ module tb_s1_execute
       G_CSRRW, G_CSRRS, G_CSRRC, G_CSRRWI, G_CSRRSI, G_CSRRCI: res = old;
       default: ;
     endcase
-    e.res_valid = !e.exc && (it.op.unit == UNIT_CSR || (it.op.unit == UNIT_ALU && !it.op.is_branch));
-
     // Successor, and where fetch went (s1_fetch contract: pred_taken => pc+imm).
     nxt        = taken ? tgt : pc_len;
     ctrl_known = !it.pred || (g inside {G_JAL, G_BEQ, G_BNE, G_BLT, G_BGE, G_BLTU, G_BGEU});
@@ -209,17 +211,27 @@ module tb_s1_execute
     e.redirect = !e.exc && (!ctrl_known || fetch_to != nxt);
     e.br_taken = !e.exc && taken && (g inside {G_BEQ, G_BNE, G_BLT, G_BGE, G_BLTU, G_BGEU});
 
+    // MUL/DIV runs outside EX; its answer is EX's result.
     e.md = !e.exc && (it.op.unit == UNIT_MUL || it.op.unit == UNIT_DIV);
-    e.q.unit = it.op.unit; e.q.op = it.op.muldiv_op; e.q.a = a; e.q.b = b;
-    e.q.cb_idx = it.cb; e.q.rd = i[11:7];
+    if (e.md) res = it.md_res;
+    e.res_valid = !e.exc && (e.md || it.op.unit == UNIT_CSR ||
+                             (it.op.unit == UNIT_ALU && !it.op.is_branch));
 
-    e.m.cb_idx   = it.cb;
-    e.m.complete = e.exc || (it.op.unit != UNIT_MXIF);
+    e.m.tag      = it.tag;
     e.m.rd       = i[11:7];
     e.m.rd_we    = it.op.rd_we && !e.exc;
     e.m.result   = res;
     e.m.next_pc  = nxt;
     e.m.exc      = e.exc;
+    e.m.amo_op   = AMO_NONE;
+    // Carried for WB (the commit point) and RVFI, exception or not.
+    e.m.pc        = it.pc;
+    e.m.instr     = it.raw;
+    e.m.sys_op    = it.op.sys_op;
+    e.m.rs1_addr  = it.op.rs1_re ? i[19:15] : '0;
+    e.m.rs2_addr  = it.op.rs2_re ? i[24:20] : '0;
+    e.m.rs1_rdata = it.op.rs1_re ? a : '0;
+    e.m.rs2_rdata = it.op.rs2_re ? b : '0;
     if (!e.exc) begin
       lsu = 1'b1;
       case (g)
@@ -234,13 +246,13 @@ module tb_s1_execute
       endcase
       e.m.is_load    = g inside {G_LB, G_LH, G_LW, G_LD, G_LBU, G_LHU, G_LWU};
       e.m.is_store   = g inside {G_SB, G_SH, G_SW, G_SD};
-      e.m.is_amo     = lsu && !e.m.is_load && !e.m.is_store;
+      is_amo         = lsu && !e.m.is_load && !e.m.is_store;
       e.m.mem_signed = g inside {G_LB, G_LH, G_LW};
-      e.m.mem_addr   = e.m.is_amo ? a : a + (e.m.is_store ? g_imm_s(i) : g_imm_i(i));
+      e.m.mem_addr   = is_amo ? a : a + (e.m.is_store ? g_imm_s(i) : g_imm_i(i));
       e.m.mem_wdata  = b;
       e.m.amo_op     = it.op.amo_op;
-      e.m.aq         = e.m.is_amo && i[26];
-      e.m.rl         = e.m.is_amo && i[25];
+      e.m.aq         = is_amo && i[26];
+      e.m.rl         = is_amo && i[25];
       src            = (g inside {G_CSRRWI, G_CSRRSI, G_CSRRCI}) ? XLEN'(i[19:15]) : a;
       e.m.csr_we     = e.csr_we;
       e.m.csr_addr   = i[31:20];
@@ -251,30 +263,34 @@ module tb_s1_execute
   endfunction
 
   // Compare EX/MEM against the model, ignoring fields that are don't-care.
+  // amo_op is always compared: it is AMO_NONE for everything but an atomic,
+  // so an excepting atomic that still reaches memory shows up here.
   task automatic check_mem(input ex_mem_t got, input exp_t e);
     ex_mem_t x;
-    x = e.m;
+    bit      amo;
+    x   = e.m;
+    amo = (x.amo_op != AMO_NONE);
     if (!e.res_valid) x.result = got.result;
     if (e.exc)        x.next_pc = got.next_pc;
-    if (!(x.is_load || x.is_store || x.is_amo)) begin
+    if (!(x.is_load || x.is_store || amo)) begin
       x.mem_addr = got.mem_addr; x.mem_wdata = got.mem_wdata; x.mem_size = got.mem_size;
-      x.mem_signed = got.mem_signed; x.amo_op = got.amo_op; x.aq = got.aq; x.rl = got.rl;
+      x.mem_signed = got.mem_signed; x.aq = got.aq; x.rl = got.rl;
     end
-    if (x.is_load || (x.is_amo && x.amo_op == AMO_LR)) x.mem_wdata = got.mem_wdata;
+    if (x.is_load || x.amo_op == AMO_LR) x.mem_wdata = got.mem_wdata;
     if (!x.csr_we) begin x.csr_addr = got.csr_addr; x.csr_wdata = got.csr_wdata; end
     checks++;
     if (got !== x) begin
       errors++;
       if (errors <= 30) begin
-        $display("  FAIL @%0d EX/MEM mismatch cb=%0d", cycle, x.cb_idx);
-        $display("       got res=%h nxt=%h ld/st/amo=%0d%0d%0d addr=%h wd=%h rd=%0d/%0d exc=%0d/%0d csr=%0d/%h/%h cmpl=%0d",
-                 got.result, got.next_pc, got.is_load, got.is_store, got.is_amo, got.mem_addr,
+        $display("  FAIL @%0d EX/MEM mismatch tag=%0d pc=%h", cycle, x.tag, x.pc);
+        $display("       got res=%h nxt=%h ld/st/amo=%0d%0d%0d addr=%h wd=%h rd=%0d/%0d exc=%0d/%0d csr=%0d/%h/%h rs=%0d:%h/%0d:%h",
+                 got.result, got.next_pc, got.is_load, got.is_store, got.amo_op, got.mem_addr,
                  got.mem_wdata, got.rd, got.rd_we, got.exc, got.exccode, got.csr_we, got.csr_addr,
-                 got.csr_wdata, got.complete);
-        $display("       exp res=%h nxt=%h ld/st/amo=%0d%0d%0d addr=%h wd=%h rd=%0d/%0d exc=%0d/%0d csr=%0d/%h/%h cmpl=%0d",
-                 x.result, x.next_pc, x.is_load, x.is_store, x.is_amo, x.mem_addr,
+                 got.csr_wdata, got.rs1_addr, got.rs1_rdata, got.rs2_addr, got.rs2_rdata);
+        $display("       exp res=%h nxt=%h ld/st/amo=%0d%0d%0d addr=%h wd=%h rd=%0d/%0d exc=%0d/%0d csr=%0d/%h/%h rs=%0d:%h/%0d:%h",
+                 x.result, x.next_pc, x.is_load, x.is_store, x.amo_op, x.mem_addr,
                  x.mem_wdata, x.rd, x.rd_we, x.exc, x.exccode, x.csr_we, x.csr_addr,
-                 x.csr_wdata, x.complete);
+                 x.csr_wdata, x.rs1_addr, x.rs1_rdata, x.rs2_addr, x.rs2_rdata);
       end
     end
   endtask
@@ -282,7 +298,7 @@ module tb_s1_execute
   // ---------------------------------------------------------------------------
   // Generation
   // ---------------------------------------------------------------------------
-  logic [CB_IDX_W-1:0] cb_next = '0;
+  logic [TAG_W-1:0] tag_next = '0;
 
   function automatic logic [XLEN-1:0] rnd_val();
     int unsigned r;
@@ -322,11 +338,11 @@ module tb_s1_execute
     it.ftval = {$urandom, $urandom};
     it.v1    = rnd_val();
     it.v2    = rnd_val();
-    it.s1    = fwd_src_e'($urandom_range(3));
-    it.s2    = fwd_src_e'($urandom_range(3));
-    if (it.s1 == FWD_MEMWB && it.s2 == FWD_MEMWB) it.v2 = it.v1;   // one MEM/WB producer
-    it.cb    = cb_next++;
+    it.s1    = fwd_src_e'($urandom_range(1));
+    it.s2    = fwd_src_e'($urandom_range(1));
+    it.tag   = tag_next++;
     it.priv  = ($urandom_range(2) == 0) ? PRIV_U : ($urandom_range(1) ? PRIV_S : PRIV_M);
+    it.md_res = rnd_val();
     return it;
   endfunction
 
@@ -353,7 +369,7 @@ module tb_s1_execute
   exp_t        memq [$];                // expected EX/MEM contents, in order
   bit          rnd_mode = 1'b0;
   bit          drv_flush = 1'b0;                       // one-shot
-  int unsigned p_item = 80, p_flush = 0, md_rdy_pct = 100, mem_rdy_pct = 100;
+  int unsigned p_item = 80, p_flush = 0, md_done_pct = 100, mem_rdy_pct = 100;
 
   bit          have, first;
   item_t       cur;
@@ -361,22 +377,15 @@ module tb_s1_execute
   logic [XLEN-1:0] a_true, b_true;
   int unsigned wait_cyc;
 
-  logic        p_md_valid, p_md_ready, p_mem_valid, p_mem_ready, p_flush_q;
-  md_req_t     p_md_req;
+  logic        p_mem_valid, p_mem_ready, p_flush_q;
   ex_mem_t     p_mem_out;
 
   int unsigned n_item, n_md, n_redir, n_exc, n_mxif, n_stall_cap, n_flush_kill, n_csrw, n_fire;
-  int unsigned n_src [4];
-
-  function automatic logic [XLEN-1:0] pick(input fwd_src_e s, input fwd_src_e want,
-                                           input logic [XLEN-1:0] v);
-    return (s == want) ? v : {$urandom, $urandom};
-  endfunction
+  int unsigned n_src [2];
 
   task automatic tick();
-    logic       v0, r0;
-    md_req_t    q0;
-    bit         fire, is_md, mem_hs;
+    logic       s0, r0;
+    bit         fire, mem_hs, md_live;
 
     // ---- drive
     if (!have) begin
@@ -391,7 +400,7 @@ module tb_s1_execute
                 $urandom, $urandom, $urandom, $urandom, $urandom, $urandom, $urandom, $urandom};
     if (have) begin
       ex_in.op         = cur.op;
-      ex_in.cb_idx     = cur.cb;
+      ex_in.tag        = cur.tag;
       ex_in.rs1_val    = (cur.s1 == FWD_RF) ? cur.v1 : cur.pc ^ 64'h1111;
       ex_in.rs2_val    = (cur.s2 == FWD_RF) ? cur.v2 : cur.pc ^ 64'h2222;
       ex_in.rs1_fwd    = cur.s1;
@@ -404,22 +413,16 @@ module tb_s1_execute
       ex_in.exctval    = cur.ftval;
       priv             = cur.priv;
     end
-    // Bypass inputs carry the true value only in the first cycle.
-    memwb_fwd = (have && first) ? pick(cur.s1, FWD_MEMWB, cur.v1) : {$urandom, $urandom};
-    if (have && first && cur.s2 == FWD_MEMWB) memwb_fwd = cur.v2;
-    cb1_fwd = (have && first) ? pick(cur.s1, FWD_CB, cur.v1) : {$urandom, $urandom};
-    cb2_fwd = (have && first) ? pick(cur.s2, FWD_CB, cur.v2) : {$urandom, $urandom};
+    md_result = {$urandom, $urandom};
 
-    // ---- settle, answer the CSR query, then probe ready-independence (R-C10)
-    md_ready = 1'b0; mem_ready = 1'b0; #1;
+    // ---- settle, answer the CSR query, then probe that nothing EX starts
+    // depends on a ready/done input (R-C10)
+    md_done = 1'b0; mem_ready = 1'b0; #1;
     csr_rdata = csr_val(csr_addr); csr_illegal = csr_bad(csr_addr, csr_re, csr_we, priv); #1;
-    v0 = md_valid; q0 = md_req; r0 = rd_valid;
-    md_ready = 1'b1; mem_ready = 1'b1; #1;
-    check(md_valid == v0 && (!v0 || md_req == q0), "md request depends on a ready input (R-C10)");
+    s0 = md_start; r0 = rd_valid;
+    md_done = 1'b1; mem_ready = 1'b1; #1;
+    check(md_start == s0, "md_start_o depends on md_done_i or mem_ready_i (R-C10)");
     check(rd_valid == r0, "redirect depends on a ready input");
-    md_ready  = ($urandom_range(99) < md_rdy_pct);
-    mem_ready = ($urandom_range(99) < mem_rdy_pct);
-    #1;
 
     // First cycle: fix the true operands and the expectation.
     if (have && first) begin
@@ -429,28 +432,38 @@ module tb_s1_execute
       n_item++; n_src[cur.s1]++;
     end
 
+    // The external unit answers no sooner than the cycle after start.
+    md_live   = have && !flush && ce.md;
+    md_done   = md_live && !first && ($urandom_range(99) < md_done_pct);
+    if (md_done) md_result = cur.md_res;
+    mem_ready = ($urandom_range(99) < mem_rdy_pct);
+    #1;
+
     // ---- check
     mem_hs = mem_valid && mem_ready;
     if (p_mem_valid && !p_mem_ready && !p_flush_q)
       check(mem_valid && mem_out == p_mem_out, "EX/MEM withdrawn or changed before accept (R-C10)");
-    if (p_md_valid && !p_md_ready && !p_flush_q && !flush && have)
-      check(md_valid && md_req == p_md_req, "md request withdrawn or changed before accept (R-C10)");
+    check(md_flush == flush, "md_flush_o differs from flush_i");
 
     if (flush || !have) begin
-      check(!rd_valid && !md_valid && !csr_re && !csr_we, "EX active while flushed or empty");
-      check(!perf_taken && !perf_misp, "perf event while flushed or empty");
+      check(!rd_valid && !md_start && !csr_re && !csr_we, "EX active while flushed or empty");
+      check(!perf_taken && !perf_misp && !perf_md_stall, "perf event while flushed or empty");
       check(ex_ready, "ex_ready_o low while flushed or empty");
     end else begin
-      check(md_valid == ce.md, "md_valid_o wrong");
-      if (ce.md) check(md_req == ce.q, $sformatf("md request payload wrong (cb %0d)", cur.cb));
-      check(rd_valid == (first && ce.redirect), $sformatf("redirect %0d, want %0d (cb %0d)",
-                                                           rd_valid, first && ce.redirect, cur.cb));
-      if (rd_valid) check(rd_pc == ce.m.next_pc && rd_cb == cur.cb, "redirect pc or cb wrong");
+      check(md_start == (first && ce.md), "md_start_o wrong");
+      // The operands must hold for as long as the unit may still read them,
+      // however EX/MEM moves underneath a forwarded one.
+      if (ce.md) check(md_op == cur.op.muldiv_op && md_a == a_true && md_b == b_true,
+                       $sformatf("MUL/DIV operands wrong (tag %0d)", cur.tag));
+      check(perf_md_stall == (ce.md && !md_done), "perf_muldiv_stall_o wrong");
+      check(rd_valid == (first && ce.redirect), $sformatf("redirect %0d, want %0d (tag %0d)",
+                                                           rd_valid, first && ce.redirect, cur.tag));
+      if (rd_valid) check(rd_pc == ce.m.next_pc, "redirect pc wrong");
       check(perf_taken == (first && ce.br_taken), "perf_br_taken_o wrong");
       check(perf_misp == rd_valid, "perf_br_mispredict_o differs from redirect");
       check(csr_re == ce.csr_re && csr_we == ce.csr_we, "CSR read/write intent wrong");
       if (csr_re || csr_we) check(csr_addr == cur.instr[31:20], "CSR address wrong");
-      check(ex_ready == (ce.md ? md_ready : (!mem_valid || mem_ready)), "ex_ready_o wrong");
+      check(ex_ready == ((!ce.md || md_done) && (!mem_valid || mem_ready)), "ex_ready_o wrong");
     end
 
     if (mem_hs) begin
@@ -462,13 +475,8 @@ module tb_s1_execute
 
     fire = have && !flush && ex_ready;
     if (fire) begin
-      is_md = ce.md;
-      if (is_md) begin
-        check(md_valid && md_ready, "fired without the dispatch handshake");
-        n_md++;
-      end else begin
-        memq.push_back(ce);
-      end
+      memq.push_back(ce);
+      if (ce.md)                      n_md++;
       if (ce.exc)                     n_exc++;
       if (cur.op.unit == UNIT_MXIF)   n_mxif++;
       if (ce.redirect)                n_redir++;
@@ -487,7 +495,6 @@ module tb_s1_execute
       end
     end
 
-    p_md_valid = md_valid; p_md_ready = md_ready; p_md_req = md_req;
     p_mem_valid = mem_valid; p_mem_ready = mem_ready; p_mem_out = mem_out;
     p_flush_q = flush;
 
@@ -509,14 +516,13 @@ module tb_s1_execute
 
   task automatic do_reset();
     clk = 0; flush = 0; ex_valid = 0; ex_in = '0; priv = PRIV_M;
-    memwb_fwd = '0; cb1_fwd = '0; cb2_fwd = '0; csr_rdata = '0; csr_illegal = 0;
-    md_ready = 0; mem_ready = 0;
+    csr_rdata = '0; csr_illegal = 0;
+    md_done = 0; md_result = '0; mem_ready = 0;
     have = 0; first = 0; dq.delete(); memq.delete();
-    p_md_valid = 0; p_md_ready = 0; p_mem_valid = 0; p_mem_ready = 0; p_flush_q = 0;
-    p_md_req = '0; p_mem_out = '0;
+    p_mem_valid = 0; p_mem_ready = 0; p_flush_q = 0; p_mem_out = '0;
     // Two-state sim: a reset low from time zero has no negedge; make one.
     rst_n = 1; #1; rst_n = 0; #1; clk = 1; #1; clk = 0; #1; rst_n = 1; #1;
-    check(!mem_valid && !md_valid && !rd_valid, "outputs active out of reset");
+    check(!mem_valid && !md_start && !rd_valid, "outputs active out of reset");
   endtask
 
   // An item with chosen operands.  x0 is avoided so the values are used.
@@ -567,7 +573,7 @@ module tb_s1_execute
     it = item_ab(w, 0, 0); it.pred = 0; it.compressed = 1;
     it.v1 = it.pc + LEN16; it.op = golden_decode(w, it.pc, 1'b1, it.fexc); it.fexc = 0; dq.push_back(it);
     // JALR predicted taken: unverifiable, always redirected.
-    it.pred = 1; it.cb = cb_next++; dq.push_back(it);
+    it.pred = 1; it.tag = tag_next++; dq.push_back(it);
     // Non-branch predicted taken (a BTB alias): redirected to pc+len.
     w = with_regs(32'h00000013, 5, 6, 0);
     it = item_ab(w, 3, 0); it.pred = 1; it.op = golden_decode(w, it.pc, 1'b1, it.fexc); it.fexc = 0;
@@ -620,7 +626,7 @@ module tb_s1_execute
     it = item_ab(with_regs(32'h0000302f, 5, 6, 7), 64'h8000_1000, 1);
     it.op = golden_decode(it.instr, it.pc, 1'b1, it.fexc); it.op.imm = 64'h40; it.fexc = 0;
     dq.push_back(it);
-    // Illegal DIV: no dispatch.
+    // Illegal DIV: the MUL/DIV unit is not started.
     it = item_ab(32'h02004033, 5, 0); it.op = golden_decode(32'h02004033, it.pc, 1'b1, it.fexc);
     it.op.illegal = 1; it.fexc = 0; dq.push_back(it);
     drain();
@@ -628,22 +634,24 @@ module tb_s1_execute
 
   task automatic test_stalls();
     item_t it;
-    // DIV held off for 10 cycles; bypass inputs change meanwhile.
+    // DIV answered only after 10 cycles, rs1 forwarded from an EX/MEM that
+    // drains meanwhile: the operand EX captured must not change.
+    dq.push_back(item_ab(32'h00a00293, 0, 0));                   // fill EX/MEM first
     it = item_ab(with_regs(32'h02004033, 5, 6, 7), 100, 7);
-    it.s1 = FWD_MEMWB; it.s2 = FWD_CB; it.op = golden_decode(it.instr, it.pc, 1'b1, it.fexc);
+    it.s1 = FWD_EXMEM; it.op = golden_decode(it.instr, it.pc, 1'b1, it.fexc);
     it.fexc = 0; dq.push_back(it);
-    md_rdy_pct = 0; run(10); md_rdy_pct = 100; drain();
+    md_done_pct = 0; run(10); md_done_pct = 100; drain();
     // Mispredicted branch held in EX by MEM: exactly one redirect.
     it = item_ab(enc_beq(8, 5, 6), 1, 1);
-    it.pred = 0; it.s1 = FWD_CB; it.op = golden_decode(it.instr, it.pc, 1'b1, it.fexc); it.fexc = 0;
+    it.pred = 0; it.s1 = FWD_EXMEM; it.op = golden_decode(it.instr, it.pc, 1'b1, it.fexc); it.fexc = 0;
     dq.push_back(item_ab(32'h00a00293, 0, 0));                   // fill EX/MEM first
     dq.push_back(it);
     mem_rdy_pct = 0; run(12); mem_rdy_pct = 100; drain();
     // Flush a waiting DIV and a full EX/MEM.
     dq.push_back(item_ab(with_regs(32'h02004033, 5, 6, 7), 9, 3));
-    md_rdy_pct = 0; run(3);
+    md_done_pct = 0; run(3);
     drv_flush = 1; tick();
-    md_rdy_pct = 100; drain();
+    md_done_pct = 100; drain();
   endtask
 
   task automatic test_throughput();
@@ -659,16 +667,16 @@ module tb_s1_execute
   task automatic random_profile(input string name, input int unsigned cycles, input int unsigned pi,
                                 input int unsigned mdr, input int unsigned memr, input int unsigned pf);
     int unsigned i0 = n_item;
-    p_item = pi; md_rdy_pct = mdr; mem_rdy_pct = memr; p_flush = pf;
+    p_item = pi; md_done_pct = mdr; mem_rdy_pct = memr; p_flush = pf;
     rnd_mode = 1; run(cycles); rnd_mode = 0;
-    md_rdy_pct = 100; mem_rdy_pct = 100; p_flush = 0;
+    md_done_pct = 100; mem_rdy_pct = 100; p_flush = 0;
     drain();
     $display("  random %-8s %6d cycles, %6d instructions", name, cycles, n_item - i0);
   endtask
 
   // ===========================================================================
   initial begin
-    $display("=== tb_s1_execute : XLEN=%0d CB_DEPTH=%0d ===", XLEN, CB_DEPTH);
+    $display("=== tb_s1_execute : XLEN=%0d ===", XLEN);
     do_reset();
 
     test_every_op();
@@ -685,7 +693,7 @@ module tb_s1_execute
     random_profile("starved", 20000,  60,  20,  25, 10);
 
     check(n_item > 30000,    "too few instructions checked");
-    check(n_md > 0,          "coverage: no MUL/DIV dispatch");
+    check(n_md > 0,          "coverage: no MUL/DIV through EX");
     check(n_redir > 0,       "coverage: no redirect");
     check(n_exc > 0,         "coverage: no exception");
     check(n_mxif > 0,        "coverage: no MXIF candidate");

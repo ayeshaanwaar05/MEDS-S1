@@ -6,14 +6,14 @@
 // Author(s)    : Ayesha Anwar (ayesha.anwaar2005@gmail.com) (Sep,2026)
 // Modified By  :
 //
-// s1_ex        : EX stage -- forwarding, ALU, branch resolution, AGU, CSR RMW  [WIP -- T-02]
+// s1_execute   : EX stage -- forwarding, ALU, branch resolution, AGU, CSR RMW  [WIP -- T-02]
 // Description  :
 // Resolves operands (SPEC 8.1), executes on s1_alu, resolves branches and
 // redirects fetch on a mispredict, computes load/store addresses and CSR
 // read-modify-write values (committed in WB), and runs MUL and DIV in place.
-// Registers everything else into EX/MEM.  Contract: docs/modules/s1_ex.md.
+// Registers everything else into EX/MEM.  Contract: docs/modules/s1_execute.md.
 //
-// Reference: SPEC 6, 7.3, 8.1, 8.2, 9, 12.  Testbench: core/verif/tb_s1_core.sv.
+// Reference: SPEC 6, 7.3, 8.1, 8.2, 9, 12.  Testbench: verif/unit/tb_s1_execute.sv.
 // =============================================================================
 
 module s1_execute
@@ -236,7 +236,7 @@ module s1_execute
   // "valid, not flushed, and not already busy here".
   assign md_start = is_md && first;
 
-  // The multiplier/divider is external (docs/modules/s1_core.md).
+  // The multiplier/divider is external (SPEC 2.1).
   // It is not a pipeline unit: `start_o` is this instruction's first EX cycle,
   // EX holds the instruction until `done_i`, and the answer is EX's result.
   assign md_start_o = md_start;

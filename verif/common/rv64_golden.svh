@@ -224,12 +224,12 @@ function automatic decoded_op_t golden_decode(input logic [31:0] i, input logic 
     end
 
     G_MUL, G_MULH, G_MULHSU, G_MULHU, G_MULW: begin
-      d.unit = UNIT_MUL; d.is_mul = 1; d.rs1_re = 1; d.rs2_re = 1; d.rd_we = 1;
+      d.unit = UNIT_MUL; d.rs1_re = 1; d.rs2_re = 1; d.rd_we = 1;
       d.muldiv_op = (g == G_MUL) ? MULDIV_MUL : (g == G_MULH) ? MULDIV_MULH :
                     (g == G_MULHSU) ? MULDIV_MULHSU : (g == G_MULHU) ? MULDIV_MULHU : MULDIV_MULW;
     end
     G_DIV, G_DIVU, G_REM, G_REMU, G_DIVW, G_DIVUW, G_REMW, G_REMUW: begin
-      d.unit = UNIT_DIV; d.is_div = 1; d.rs1_re = 1; d.rs2_re = 1; d.rd_we = 1;
+      d.unit = UNIT_DIV; d.rs1_re = 1; d.rs2_re = 1; d.rd_we = 1;
       case (g)
         G_DIV:   d.muldiv_op = MULDIV_DIV;   G_DIVU:  d.muldiv_op = MULDIV_DIVU;
         G_REM:   d.muldiv_op = MULDIV_REM;   G_REMU:  d.muldiv_op = MULDIV_REMU;
@@ -248,7 +248,7 @@ function automatic decoded_op_t golden_decode(input logic [31:0] i, input logic 
     G_SFENCE_VMA: begin d.sys_op = SYS_SFENCE_VMA; d.rs1_re = 1; d.rs2_re = 1; end
 
     G_CSRRW, G_CSRRS, G_CSRRC, G_CSRRWI, G_CSRRSI, G_CSRRCI: begin
-      d.unit = UNIT_CSR; d.is_csr = 1; d.rd_we = 1; d.csr_addr = i[31:20];
+      d.unit = UNIT_CSR; d.rd_we = 1; d.csr_addr = i[31:20];
       d.csr_imm = g inside {G_CSRRWI, G_CSRRSI, G_CSRRCI};
       d.rs1_re  = !d.csr_imm;
       d.imm     = 64'(i[19:15]);
@@ -257,7 +257,7 @@ function automatic decoded_op_t golden_decode(input logic [31:0] i, input logic 
     end
 
     default: begin   // RV64A
-      d.unit = UNIT_LSU; d.is_amo = 1; d.rs1_re = 1; d.rd_we = 1;
+      d.unit = UNIT_LSU; d.rs1_re = 1; d.rd_we = 1;
       d.aq = i[26]; d.rl = i[25];
       d.mem_size = i[12] ? LS_DOUBLE : LS_WORD;
       d.rs2_re   = !(g inside {G_LR_W, G_LR_D});

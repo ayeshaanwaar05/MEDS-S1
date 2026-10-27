@@ -19,6 +19,7 @@ Status tags follow CODING_STANDARD.md §5. This table is the fastest way to see 
 | Module | Status | Project | Testbench | Docs |
 |---|---|---|---|---|
 | `s1_pkg.sv` | COMPLETE | — | n/a | shared types |
+| `s1_rvc_expand.sv` | COMPLETE | T-01 | `tb_s1_rvc_expand` (131177 checks, exhaustive) | [page](../../docs/modules/s1_rvc_expand.md) |
 | `s1_alu.sv` | **COMPLETE — REFERENCE** | T-02 | `tb_s1_alu` (4206 checks) | [page](../../docs/modules/s1_alu.md) |
 | `s1_fetch.sv` | WIP — unit-verified, fetch interface not yet ratified | T-01 | `tb_s1_fetch` (326434 checks) | [page](../../docs/modules/s1_fetch.md) |
 | `s1_decode.sv` | TODO | T-02 | | |
